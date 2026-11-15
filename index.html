@@ -10936,5 +10936,164 @@ window.bcQueueAll=function(){
 })();
 </script>
 
+<style id="mu-cloud">
+.cloud-btn{background:linear-gradient(135deg,#2563EB,#4F46E5)!important;border-color:transparent!important;font-weight:800;position:relative}
+.cloud-btn .cl-dot{position:absolute;top:5px;left:5px;width:9px;height:9px;border-radius:50%;background:#94A3B8;box-shadow:0 0 0 2px #fff}
+.cloud-btn.on .cl-dot{background:#22C55E}.cloud-btn.busy .cl-dot{background:#F59E0B}.cloud-btn.err .cl-dot{background:#EF4444}
+@media(max-width:1180px){.cloud-btn .cl-lbl{display:none}}
+.cl-box{border:1px solid var(--border);border-radius:var(--r2,12px);padding:14px 16px;margin-top:12px;background:#F8FAFC}
+.cl-box h4{margin:0 0 8px;font-size:16.5px;color:#1E3A8A;display:flex;align-items:center;gap:7px}
+.cl-st{font-size:15.5px;line-height:1.9}
+.cl-st b{color:#0F766E}
+.cl-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.cl-note{font-size:14px;color:var(--text2);margin-top:8px;line-height:1.8}
+#cl-banner{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:1200;background:#1E3A8A;color:#fff;border-radius:14px;padding:12px 16px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:15.5px;font-weight:700}
+#cl-banner.v{display:flex}
+#cl-banner button{background:#fff;color:#1E3A8A;border:none;border-radius:9px;padding:7px 14px;font-weight:800;cursor:pointer;font-family:inherit}
+</style>
+<div class="modal-bg" id="cloud-modal">
+  <div class="modal" style="max-width:520px">
+    <div class="modal-title"><i class="ti ti-cloud" style="color:#2563EB"></i> المزامنة السحابية</div>
+    <div class="modal-sub">تُحفظ المعطيات في السحابة (Supabase) وتتزامن تلقائياً بين كل الأجهزة والنسخ: الموقع، ويندوز، أندرويد.</div>
+    <div id="cl-body"></div>
+    <div class="modal-actions" style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" onclick="closeModal('cloud-modal')">إغلاق</button></div>
+  </div>
+</div>
+<div id="cl-banner"><span>وصلت معطيات جديدة من جهاز آخر</span><button onclick="cloudApplyReload()">تحديث الآن</button></div>
+<script id="mu-cloud-js">
+/* المزامنة السحابية عبر Supabase: جدول kv (school_id,key,value,updated_at) محمي بـRLS؛ الحسابات في Supabase Auth، والعضوية في جدول members */
+(function(){
+'use strict';
+var URL_='https://cuqejkwhiwvarevsttvu.supabase.co',KEY='sb_publishable_kVB_Qr3Gfn0I_H3Rzei5sw_uXx4LYGq';
+var SKIP=['login_remember_v1','mu_sb_mini','mu_cloud_v1','mu_cloud_meta_v1','mu_cloud_dirty_v1'];
+var LS=window.localStorage,_set=Storage.prototype.setItem,_rem=Storage.prototype.removeItem;
+function rd(k,d){try{var v=LS.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
+function wr(k,v){try{_set.call(LS,k,JSON.stringify(v));}catch(e){}}
+var S=rd('mu_cloud_v1',null),META=rd('mu_cloud_meta_v1',{}),DIRTY=rd('mu_cloud_dirty_v1',{});
+var pushT=null,busy=false,lastErr='',lastSync=S&&S.last||'',pendingReload=false;
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+function saveS(){wr('mu_cloud_v1',S);}
+/* اعتراض الكتابة في localStorage: كل مفتاح يتغيّر يُعلَّم ويُرفع بعد 3 ثوان */
+Storage.prototype.setItem=function(k,v){_set.call(this,k,v);if(this===LS&&S&&S.ready&&SKIP.indexOf(k)<0){DIRTY[k]=1;wr('mu_cloud_dirty_v1',DIRTY);schedule();}};
+Storage.prototype.removeItem=function(k){_rem.call(this,k);if(this===LS&&S&&S.ready&&SKIP.indexOf(k)<0){DIRTY[k]=2;wr('mu_cloud_dirty_v1',DIRTY);schedule();}};
+function schedule(){clearTimeout(pushT);pushT=setTimeout(function(){sync(false);},3000);}
+/* الطلبات */
+async function api(path,opt){
+  opt=opt||{};await ensureToken();
+  var h=Object.assign({apikey:KEY,Authorization:'Bearer '+S.access,'Content-Type':'application/json'},opt.headers||{});
+  var r=await fetch(URL_+path,{method:opt.method||'GET',headers:h,body:opt.body});
+  if(!r.ok){var t=await r.text();throw new Error(r.status+' '+t.slice(0,160));}
+  var tx=await r.text();return tx?JSON.parse(tx):null;}
+async function auth(body,grant){
+  var r=await fetch(URL_+'/auth/v1/token?grant_type='+grant,{method:'POST',headers:{apikey:KEY,'Content-Type':'application/json'},body:JSON.stringify(body)});
+  var j=await r.json();if(!r.ok)throw new Error(j.error_description||j.msg||j.message||('خطأ '+r.status));return j;}
+function takeTok(j){S.access=j.access_token;S.refresh=j.refresh_token;S.exp=Date.now()+(j.expires_in||3600)*1000;saveS();}
+async function ensureToken(){if(!S||!S.refresh)throw new Error('غير متصل');if(Date.now()<S.exp-60000)return;takeTok(await auth({refresh_token:S.refresh},'refresh_token'));}
+/* المزامنة */
+async function remoteIndex(){var rows=await api('/rest/v1/kv?select=key,updated_at&school_id=eq.'+encodeURIComponent(S.school));var m={};rows.forEach(function(r){m[r.key]=r.updated_at;});return m;}
+function inList(keys){return 'in.('+keys.map(function(k){return '"'+k.replace(/"/g,'\\"')+'"';}).join(',')+')';}
+async function pull(idx){
+  var need=Object.keys(idx).filter(function(k){return SKIP.indexOf(k)<0&&!DIRTY[k]&&META[k]!==idx[k];});
+  for(var i=0;i<need.length;i+=40){
+    var part=need.slice(i,i+40);
+    var rows=await api('/rest/v1/kv?select=key,value,updated_at&school_id=eq.'+encodeURIComponent(S.school)+'&key='+encodeURIComponent(inList(part)));
+    rows.forEach(function(r){if(r.value==null)_rem.call(LS,r.key);else _set.call(LS,r.key,r.value);META[r.key]=r.updated_at;});}
+  /* مفاتيح حُذفت من السحابة بعد آخر مزامنة */
+  Object.keys(META).forEach(function(k){if(!(k in idx)&&!DIRTY[k]){_rem.call(LS,k);delete META[k];need.push(k);}});
+  wr('mu_cloud_meta_v1',META);return need.length;}
+async function push(){
+  var ks=Object.keys(DIRTY);if(!ks.length)return 0;
+  var up=ks.filter(function(k){return DIRTY[k]===1&&LS.getItem(k)!=null;}),del=ks.filter(function(k){return up.indexOf(k)<0;});
+  for(var i=0;i<up.length;i+=20){
+    var part=up.slice(i,i+20),body=part.map(function(k){return{school_id:S.school,key:k,value:LS.getItem(k)};});
+    var rows=await api('/rest/v1/kv?on_conflict=school_id,key&select=key,updated_at',{method:'POST',headers:{Prefer:'resolution=merge-duplicates,return=representation'},body:JSON.stringify(body)});
+    rows.forEach(function(r){META[r.key]=r.updated_at;delete DIRTY[r.key];});}
+  for(var j=0;j<del.length;j+=40){var dp=del.slice(j,j+40);
+    await api('/rest/v1/kv?school_id=eq.'+encodeURIComponent(S.school)+'&key='+encodeURIComponent(inList(dp)),{method:'DELETE'});
+    dp.forEach(function(k){delete META[k];delete DIRTY[k];});}
+  wr('mu_cloud_meta_v1',META);wr('mu_cloud_dirty_v1',DIRTY);return up.length+del.length;}
+async function sync(manual){
+  if(!S||!S.ready||busy)return;busy=true;ui();
+  try{var n=await push();var idx=await remoteIndex();var got=await pull(idx);
+    lastErr='';S.last=lastSync=new Date().toLocaleString('ar-MA');saveS();
+    if(got){if(manual)cloudApplyReload();else{pendingReload=true;document.getElementById('cl-banner').classList.add('v');}}
+    else if(manual)showToast('☁ المزامنة تمّت'+(n?' — رُفع '+n+' عنصراً':''));}
+  catch(e){lastErr=e.message;if(manual)showToast('⚠ تعذّرت المزامنة: '+e.message);}
+  busy=false;ui();}
+window.cloudApplyReload=function(){
+  /* تبقى الجلسة المحلية بعد إعادة التحميل (تُستأنف مرة واحدة دون إعادة إدخال كلمة المرور) */
+  try{if(window.CUR_USER||typeof CUR_USER!=='undefined'&&CUR_USER){var pg=document.querySelector('.page.active');sessionStorage.setItem('mu_cl_resume',JSON.stringify({email:CUR_USER.email,page:pg?pg.id.replace(/^page-/,''):''}));}}catch(e){}
+  location.reload();};
+function resume(){
+  var r;try{r=JSON.parse(sessionStorage.getItem('mu_cl_resume')||'null');sessionStorage.removeItem('mu_cl_resume');}catch(e){}
+  if(!r||!r.email||typeof authFind!=='function')return;
+  var u=authFind(r.email);if(!u||!u.active)return;
+  try{CUR_USER=u;document.getElementById('login-screen').style.display='none';document.getElementById('app-wrap').style.display='block';
+    applyRoleUI();init();if(typeof syncHdrH==='function'){syncHdrH();setTimeout(syncHdrH,300);}
+    if(r.page&&r.page!=='admin'&&r.page!=='att'&&document.getElementById('page-'+r.page)&&typeof showPage==='function')showPage(r.page,null);
+    showToast('☁ حُدّثت المعطيات من السحابة');}catch(e){}}
+setTimeout(resume,300);
+/* الاتصال لأول مرة */
+window.cloudLogin=async function(){
+  var em=document.getElementById('cl-em').value.trim(),pw=document.getElementById('cl-pw').value,er=document.getElementById('cl-er');
+  er.textContent='';if(!em||!pw){er.textContent='أدخل البريد وكلمة المرور';return;}
+  try{var j=await auth({email:em,password:pw},'password');S={email:em,ready:false};takeTok(j);
+    var m=await api('/rest/v1/members?select=school_id,role');
+    if(!m.length){S=null;_rem.call(LS,'mu_cloud_v1');er.textContent='هذا الحساب غير مضاف إلى المؤسسة في جدول members — أضفه المدير أولاً.';return;}
+    S.school=m[0].school_id;S.role=m[0].role;saveS();
+    var idx=await remoteIndex();S.remoteCount=Object.keys(idx).length;saveS();cloudRender(S.remoteCount?'choose':'first');}
+  catch(e){er.textContent='تعذّر الدخول: '+e.message;}};
+/* اختيار الاتجاه عند أول ربط لهذا الجهاز */
+window.cloudStart=async function(mode){
+  META={};DIRTY={};
+  if(mode==='up'){for(var i=0;i<LS.length;i++){var k=LS.key(i);if(k&&SKIP.indexOf(k)<0)DIRTY[k]=1;}}
+  wr('mu_cloud_meta_v1',META);wr('mu_cloud_dirty_v1',DIRTY);
+  if(mode==='down'){var keep={};SKIP.forEach(function(k){var v=LS.getItem(k);if(v!=null)keep[k]=v;});
+    if(document.getElementById('cl-bk')&&document.getElementById('cl-bk').checked&&window.syncExport)try{syncExport();}catch(e){}
+    var ks=[];for(var j=0;j<LS.length;j++)ks.push(LS.key(j));ks.forEach(function(k){if(SKIP.indexOf(k)<0)_rem.call(LS,k);});}
+  S.ready=true;saveS();busy=false;await sync(true);if(mode==='up')cloudRender();};
+window.cloudLogout=function(){S=null;['mu_cloud_v1','mu_cloud_meta_v1','mu_cloud_dirty_v1'].forEach(function(k){_rem.call(LS,k);});META={};DIRTY={};ui();cloudRender();showToast('فُصل هذا الجهاز عن السحابة — المعطيات المحلية باقية');};
+window.cloudSyncNow=function(){sync(true);};
+function cloudRender(step){
+  var b=document.getElementById('cl-body');if(!b)return;var h='';
+  if(!S||!S.access){
+    h='<div class="cl-box"><h4><i class="ti ti-login"></i> الدخول بحساب السحابة</h4>'
+     +'<div class="form-row"><label>البريد الإلكتروني</label><input id="cl-em" class="form-inp" type="email" style="direction:ltr;text-align:left" autocomplete="username"></div>'
+     +'<div class="form-row"><label>كلمة المرور</label><input id="cl-pw" class="form-inp" type="password" style="direction:ltr;text-align:left" autocomplete="current-password" onkeydown="if(event.key===\'Enter\')cloudLogin()"></div>'
+     +'<div id="cl-er" style="color:var(--rose);font-weight:700;margin-top:6px"></div>'
+     +'<div class="cl-row"><button class="btn pr" onclick="cloudLogin()"><i class="ti ti-cloud-check"></i> ربط هذا الجهاز</button></div>'
+     +'<div class="cl-note">الحسابات تُنشأ من لوحة Supabase (Authentication ← Users) ثم يُضاف بريدها إلى جدول members.</div></div>';
+  } else if(!S.ready){
+    h='<div class="cl-box"><h4><i class="ti ti-arrows-exchange"></i> أول ربط لهذا الجهاز</h4><div class="cl-st">الحساب: <b>'+esc(S.email)+'</b><br>في السحابة الآن: <b>'+(S.remoteCount||0)+'</b> عنصراً.</div>'
+     +(step==='first'||!S.remoteCount?'<div class="cl-note">السحابة فارغة: سيُرفع كل ما في هذا الجهاز ليصبح المرجع.</div><div class="cl-row"><button class="btn pr" onclick="cloudStart(\'up\')"><i class="ti ti-cloud-upload"></i> رفع معطيات هذا الجهاز</button></div>'
+     :'<div class="cl-note"><b>تنزيل من السحابة</b> (موصى به): تُستبدل معطيات هذا الجهاز بما في السحابة.<br><b>رفع هذا الجهاز</b>: تُستبدل عناصر السحابة بنظيرتها هنا.</div>'
+      +'<label style="display:flex;gap:6px;align-items:center;margin-top:8px;font-size:15px"><input type="checkbox" id="cl-bk" checked> تنزيل نسخة أمان من معطيات هذا الجهاز أولاً</label>'
+      +'<div class="cl-row"><button class="btn pr" onclick="cloudStart(\'down\')"><i class="ti ti-cloud-download"></i> تنزيل من السحابة</button><button class="btn" onclick="cloudStart(\'up\')"><i class="ti ti-cloud-upload"></i> رفع هذا الجهاز</button></div>')
+     +'<div class="cl-row"><button class="btn" onclick="cloudLogout()">إلغاء</button></div></div>';
+  } else {
+    var nd=Object.keys(DIRTY).length;
+    h='<div class="cl-box"><h4><i class="ti ti-cloud-check" style="color:#16A34A"></i> متصل</h4><div class="cl-st">الحساب: <b>'+esc(S.email)+'</b><br>المؤسسة: <b>'+esc(S.school)+'</b><br>آخر مزامنة: <b>'+esc(lastSync||'—')+'</b><br>في انتظار الرفع: <b>'+nd+'</b>'
+     +(lastErr?'<br><span style="color:var(--rose)">آخر خطأ: '+esc(lastErr)+'</span>':'')+'</div>'
+     +'<div class="cl-row"><button class="btn pr" onclick="cloudSyncNow()"><i class="ti ti-refresh"></i> مزامنة الآن</button><button class="btn" onclick="cloudLogout()"><i class="ti ti-plug-connected-x"></i> فصل هذا الجهاز</button></div>'
+     +'<div class="cl-note">كل تعديل يُرفع تلقائياً بعد 3 ثوان، والسحابة تُفحص كل دقيقة وعند العودة إلى النافذة. إن عدّل جهازان العنصر نفسه في الوقت نفسه يُعتمد آخر حفظ. دون إنترنت يستمر العمل محلياً ويُرفع لاحقاً.</div></div>';}
+  b.innerHTML=h;}
+window.openCloudModal=function(){cloudRender();document.getElementById('cloud-modal').classList.add('open');};
+function ui(){var bt=document.querySelector('.cloud-btn');if(!bt)return;bt.classList.toggle('on',!!(S&&S.ready)&&!lastErr);bt.classList.toggle('busy',busy);bt.classList.toggle('err',!!lastErr);
+  bt.title=S&&S.ready?('السحابة: متصل ('+S.email+')'+(lastErr?' — خطأ':'')):'المزامنة السحابية: غير متصل';
+  if(document.getElementById('cloud-modal').classList.contains('open')&&S&&S.ready)cloudRender();}
+function addBtn(){var hr=document.querySelector('.hdr-right');if(!hr||hr.querySelector('.cloud-btn'))return;
+  var b=document.createElement('button');b.className='logout-btn cloud-btn';b.style.marginLeft='4px';
+  b.innerHTML='<span class="cl-dot"></span><i class="ti ti-cloud"></i><span class="cl-lbl"> السحابة</span>';b.onclick=openCloudModal;
+  var ref=hr.querySelector('.sync-btn')||hr.querySelector('[onclick="openMyAccount()"]');hr.insertBefore(b,ref||hr.lastElementChild);
+  var ns=document.querySelector('.nav-sync');if(ns&&!document.querySelector('.nav-cloud')){var n=document.createElement('button');n.className='nav-btn nav-cloud';n.innerHTML='<i class="ti ti-cloud"></i> المزامنة السحابية';n.onclick=openCloudModal;ns.parentNode.insertBefore(n,ns);}
+  ui();}
+addBtn();setTimeout(addBtn,1500);
+if(S&&S.ready)setTimeout(function(){sync(false);},1500);
+setInterval(function(){if(!document.hidden)sync(false);},60000);
+document.addEventListener('visibilitychange',function(){if(!document.hidden)sync(false);});
+window.addEventListener('online',function(){if(S&&S.ready)sync(false);});
+})();
+</script>
+
 </body>
 </html>
