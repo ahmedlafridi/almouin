@@ -10947,7 +10947,7 @@ window.bcQueueAll=function(){
 .cl-st b{color:#0F766E}
 .cl-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .cl-note{font-size:14px;color:var(--text2);margin-top:8px;line-height:1.8}
-#cl-banner{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:1200;background:#1E3A8A;color:#fff;border-radius:14px;padding:12px 16px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:15.5px;font-weight:700}
+#cl-banner{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:100000;background:#1E3A8A;color:#fff;border-radius:14px;padding:12px 16px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:15.5px;font-weight:700}
 #cl-banner.v{display:flex}
 #cl-banner button{background:#fff;color:#1E3A8A;border:none;border-radius:9px;padding:7px 14px;font-weight:800;cursor:pointer;font-family:inherit}
 </style>
@@ -10997,7 +10997,9 @@ async function pull(idx){
   for(var i=0;i<need.length;i+=40){
     var part=need.slice(i,i+40);
     var rows=await api('/rest/v1/kv?select=key,value,updated_at&school_id=eq.'+encodeURIComponent(S.school)+'&key='+encodeURIComponent(inList(part)));
-    rows.forEach(function(r){if(r.value==null)_rem.call(LS,r.key);else _set.call(LS,r.key,r.value);META[r.key]=r.updated_at;});}
+    rows.forEach(function(r){if(r.value==null)_rem.call(LS,r.key);else _set.call(LS,r.key,r.value);META[r.key]=r.updated_at;
+      /* الحسابات: تُحدَّث في الذاكرة فوراً (حتى في شاشة الدخول) */
+      if(r.key==='auth_v1'&&r.value)try{AUTH=JSON.parse(r.value);AUTH_FAILS=0;AUTH_LOCK_UNTIL=0;}catch(e){}});}
   /* مفاتيح حُذفت من السحابة بعد آخر مزامنة */
   Object.keys(META).forEach(function(k){if(!(k in idx)&&!DIRTY[k]){_rem.call(LS,k);delete META[k];need.push(k);}});
   wr('mu_cloud_meta_v1',META);return need.length;}
