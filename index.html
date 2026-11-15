@@ -10949,6 +10949,9 @@ window.bcQueueAll=function(){
 .cl-note{font-size:14px;color:var(--text2);margin-top:8px;line-height:1.8}
 #cl-banner{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:100000;background:#1E3A8A;color:#fff;border-radius:14px;padding:12px 16px;display:none;align-items:center;gap:12px;box-shadow:0 10px 30px rgba(0,0,0,.25);font-size:15.5px;font-weight:700}
 #cl-banner.v{display:flex}
+#cloud-modal{z-index:10050}
+.cl-login-link{display:flex;align-items:center;justify-content:center;gap:6px;width:100%;margin-top:12px;background:none;border:1px dashed #93C5FD;color:#1D4ED8;border-radius:12px;padding:10px;font:inherit;font-size:15px;font-weight:700;cursor:pointer}
+.cl-login-link:hover{background:#EFF6FF}
 #cl-banner button{background:#fff;color:#1E3A8A;border:none;border-radius:9px;padding:7px 14px;font-weight:800;cursor:pointer;font-family:inherit}
 </style>
 <div class="modal-bg" id="cloud-modal">
@@ -11090,6 +11093,11 @@ function addBtn(){var hr=document.querySelector('.hdr-right');if(!hr||hr.querySe
   var ns=document.querySelector('.nav-sync');if(ns&&!document.querySelector('.nav-cloud')){var n=document.createElement('button');n.className='nav-btn nav-cloud';n.innerHTML='<i class="ti ti-cloud"></i> المزامنة السحابية';n.onclick=openCloudModal;ns.parentNode.insertBefore(n,ns);}
   ui();}
 addBtn();setTimeout(addBtn,1500);
+/* رابط في شاشة الدخول: ربط جهاز جديد بالسحابة قبل الدخول (يجلب الحسابات وكلمات المرور) */
+(function(){var f=document.getElementById('login-form');if(!f||document.querySelector('.cl-login-link'))return;
+  var l=document.createElement('button');l.type='button';l.className='cl-login-link';
+  l.innerHTML='<i class="ti ti-cloud"></i> '+(S&&S.ready?'السحابة: متصل — مزامنة الآن':'جهاز جديد؟ اربطه بالسحابة لجلب الحسابات والمعطيات');
+  l.onclick=function(){if(S&&S.ready)cloudSyncNow();else openCloudModal();};f.parentNode.insertBefore(l,f.nextSibling);})();
 if(S&&S.ready)setTimeout(function(){sync(false);},1500);
 setInterval(function(){if(!document.hidden)sync(false);},60000);
 document.addEventListener('visibilitychange',function(){if(!document.hidden)sync(false);});
