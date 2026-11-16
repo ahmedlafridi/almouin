@@ -1044,15 +1044,18 @@ body{line-height:1.5;font-family:var(--font);background:var(--bg);color:var(--te
   <div style="background:#fff;border:2px solid var(--border);border-radius:var(--r2);overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px">
     <div style="padding:12px 16px;background:#E0F2FE;display:flex;align-items:center;gap:8px">
       <i class="ti ti-alert-circle" style="color:#0369A1"></i>
-      <span style="font-size:14.5px;font-weight:800;color:#0369A1">غيابات تستوجب تعويضاً (بناءً على صفحة الحضور — غير الرخص المرضية)</span>
+      <span style="font-size:14.5px;font-weight:800;color:#0369A1">غيابات تستوجب تعويضاً — قسماً قسماً (بناءً على صفحة الحضور — غير الرخص المرضية)</span>
+      <span id="makeup-pending-sum" style="margin-right:auto;font-size:13.5px;font-weight:800;color:#075985"></span>
     </div>
     <div style="overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:680px">
+    <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:860px">
       <thead>
         <tr style="background:linear-gradient(135deg,var(--sky),#0369A1)">
           <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">تاريخ الغياب</th>
           <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">الأستاذ(ة)</th>
           <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">المادة</th>
+          <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">القسم غير المدرَّس</th>
+          <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">الساعات</th>
           <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">القاعة الأصلية</th>
           <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">الفترة</th>
           <th style="padding:8px 12px;text-align:right;font-weight:800;color:#fff;font-size:12px">سبب الغياب</th>
@@ -4757,43 +4760,67 @@ var makeups=[];
 try{makeups=JSON.parse(localStorage.getItem('makeups_v1')||'[]');}catch(e){}
 function saveMakeups(){try{localStorage.setItem('makeups_v1',JSON.stringify(makeups));}catch(e){}}
 
+/* التعويض قسماً قسماً: كل غياب (كلي أو جزئي، سببه غير المرض) يُفكَّك حسب أقسام الساعات غير المنجزة،
+   ولكل قسم سطر مستقل بمفتاح «مفتاح الغياب#القسم». التعويضات القديمة (مفتاح بلا #) تغطي الغياب كله. */
+function mkAbsHours(k,v,s){
+  var p=k.split('|'),hm=s.hoursMask||[1,1,1,1],out=[];
+  var full=v.status==='absent'||(v.status==='excused'&&COMP_REASONS.indexOf(v.reason)>=0);
+  for(var i=0;i<4;i++){
+    if(!hm[i])continue;
+    if(full){out.push(i);continue;}
+    if(v.status==='absent'||v.status==='excused'||v.status==='present')continue;
+    var h=att[p[0]+'|'+p[1]+'|'+p[2]+'|'+p[3]+'|'+i];
+    if(h&&(h.status==='absent'||(h.status==='excused'&&COMP_REASONS.indexOf(v.reason)>=0)))out.push(i);
+  }
+  return {hours:out,partial:!full};
+}
 function buildPendingMakeups(){
   var compensated={};
   makeups.forEach(m=>{if(m.absKey)compensated[m.absKey]=true;});
   var list=[];
   Object.keys(att).forEach(k=>{
     var v=att[k];
-    if(!v||(v.status!=='absent'&&!(v.status==='excused'&&COMP_REASONS.indexOf(v.reason)>=0)))return;
-    if(!k.includes('|master'))return;
+    if(!v||!k.includes('|master'))return;
     if(!v.reason||v.reason==='مرض')return; // استثناء الرخص المرضية
-    if(compensated[k])return;
+    if(compensated[k])return; // تعويض قديم يغطي الغياب كله
     var parts=k.split('|');if(parts.length<5)return;
     var date=parts[0],dow=parseInt(parts[1]),rawIdx=parseInt(parts[2]),slot=parseInt(parts[3]);
     var sessions=buildSessions(dow);
     var s=sessions.find(x=>x.rawIdx===rawIdx&&x.slot===slot);
     if(!s)return;
-    var t=findTeacher(s.n);
-    list.push({absKey:k,date:date,teacher:t.name,sub:t.sub||s.s,room:s.r,period:s.p,reason:v.reason});
+    var ah=mkAbsHours(k,v,s);if(!ah.hours.length)return;
+    var t=findTeacher(s.n),groups={},order=[];
+    ah.hours.forEach(function(i){var c=tcClassAt(t,dow,s.p,i)||'';if(!groups[c]){groups[c]=[];order.push(c);}groups[c].push(i);});
+    order.forEach(function(c){
+      var key=k+'#'+c;if(compensated[key])return;
+      list.push({absKey:key,date:date,teacher:t.name,sub:t.sub||s.s,room:s.r,period:s.p,reason:v.reason,cls:c,hours:groups[c],partial:ah.partial});
+    });
   });
-  list.sort((a,b)=>b.date.localeCompare(a.date));
+  list.sort((a,b)=>b.date.localeCompare(a.date)||a.teacher.localeCompare(b.teacher,'ar')||a.hours[0]-b.hours[0]);
   return list;
 }
+function mkHoursLbl(hs){return hs.map(function(i){return 'ح'+(i+1);}).join('، ')+' ('+hs.length+' س)';}
 
 function renderMakeupPage(){
   var pending=buildPendingMakeups();
   var pbody=document.getElementById('makeup-pending-body');
+  var sum=document.getElementById('makeup-pending-sum');
+  if(sum){var th=0,tt={};pending.forEach(function(p){th+=p.hours.length;tt[p.teacher]=1;});
+    sum.textContent=pending.length?('التعويضات المنتظرة: '+pending.length+' — الساعات: '+th+' — الأساتذة: '+Object.keys(tt).length):'';}
   if(!pending.length){
-    pbody.innerHTML='<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text3)">لا توجد غيابات تستوجب تعويضاً حالياً</td></tr>';
+    pbody.innerHTML='<tr><td colspan="9" style="text-align:center;padding:20px;color:var(--text3)">لا توجد غيابات تستوجب تعويضاً حالياً</td></tr>';
   } else {
     pbody.innerHTML=pending.map(p=>{
       return '<tr style="border-bottom:1.5px solid #F0FDF9">'
         +'<td style="padding:8px 12px;font-weight:700">'+p.date+'</td>'
         +'<td style="padding:8px 12px;font-weight:700">'+p.teacher+'</td>'
         +'<td style="padding:8px 12px">'+(p.sub||'—')+'</td>'
+        +'<td style="padding:8px 12px">'+(p.cls?'<span style="background:var(--teal-l);color:var(--teal-d);border-radius:8px;padding:2px 8px;font-size:12px;font-weight:800">'+vacEsc(p.cls)+'</span>':'<span style="color:var(--rose);font-size:12px;font-weight:700" title="لم يُحدَّد قسم هذه الساعات في صفحة الحضور">قسم غير محدد</span>')+'</td>'
+        +'<td style="padding:8px 12px;font-weight:700;white-space:nowrap">'+mkHoursLbl(p.hours)+'</td>'
         +'<td style="padding:8px 12px;text-align:center">'+p.room+'</td>'
         +'<td style="padding:8px 12px;text-align:center">'+(p.period==='ص'?'☀️ صباحية':'🌙 مسائية')+'</td>'
-        +'<td style="padding:8px 12px"><span style="background:#FEF3C7;color:#92400E;border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">'+p.reason+'</span></td>'
-        +'<td style="padding:8px 12px"><button class="btn pr" style="font-size:12px;padding:5px 10px" onclick="openMakeupModal(\''+p.absKey.replace(/'/g,"\\'")+'\')"><i class="ti ti-replace"></i> تسجيل تعويض</button></td>'
+        +'<td style="padding:8px 12px"><span style="background:#FEF3C7;color:#92400E;border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">'+vacEsc(p.reason)+'</span>'+(p.partial?' <span style="font-size:12px;color:var(--text3)">(غياب جزئي)</span>':'')+'</td>'
+        +'<td style="padding:8px 12px"><button class="btn pr" style="font-size:12px;padding:5px 10px" onclick="openMakeupModal(\''+vacEsc(p.absKey.replace(/\\/g,'\\\\').replace(/'/g,"\\'"))+'\')"><i class="ti ti-replace"></i> تسجيل تعويض</button></td>'
         +'</tr>';
     }).join('');
   }
@@ -4808,7 +4835,7 @@ function renderMakeupPage(){
         +'<td style="padding:8px 12px;font-weight:700">'+m.teacher+'</td>'
         +'<td style="padding:8px 12px">'+(m.sub||'—')+'</td>'
         +'<td style="padding:8px 12px"><span style="background:var(--teal-l);color:var(--teal-d);border-radius:8px;padding:2px 8px;font-size:12px;font-weight:700">'+(m.cls||'—')+'</span></td>'
-        +'<td style="padding:8px 12px">'+(m.absDate||'—')+'</td>'
+        +'<td style="padding:8px 12px">'+(m.absDate||'—')+((m.absHours||[]).length?' <span style="font-size:12px;color:var(--text3)">('+m.absHours.length+' س)</span>':'')+'</td>'
         +'<td style="padding:8px 12px;font-weight:700">'+(m.date||'—')+'</td>'
         +'<td style="padding:8px 12px">'+(m.timeFrom&&m.timeTo?(m.timeFrom+' - '+m.timeTo):'—')+'</td>'
         +'<td style="padding:8px 12px;text-align:center">'+(m.room||'—')+'</td>'
@@ -4819,23 +4846,29 @@ function renderMakeupPage(){
 }
 
 function openMakeupModal(absKey){
-  var v=att[absKey];
+  var hi=absKey.indexOf('#'),mk=hi>=0?absKey.slice(0,hi):absKey,cls0=hi>=0?absKey.slice(hi+1):'';
+  var v=att[mk];
   if(!v){showToast('⚠️ تعذر العثور على سجل الغياب');return;}
-  var parts=absKey.split('|');
+  var parts=mk.split('|');
   var date=parts[0],dow=parseInt(parts[1]),rawIdx=parseInt(parts[2]),slot=parseInt(parts[3]);
   var sessions=buildSessions(dow);
   var s=sessions.find(x=>x.rawIdx===rawIdx&&x.slot===slot);
   if(!s){showToast('⚠️ تعذر العثور على الحصة المرتبطة');return;}
   var t=findTeacher(s.n);
+  var hrs=mkAbsHours(mk,v,s).hours.filter(function(i){return hi<0||(tcClassAt(t,dow,s.p,i)||'')===cls0;});
   document.getElementById('makeup-abs-key').value=absKey;
+  document.getElementById('makeup-abs-key').dataset.hours=hrs.join(',');
   document.getElementById('makeup-teacher').value=t.name;
   document.getElementById('makeup-sub').value=t.sub||s.s||'';
-  document.getElementById('makeup-abs-info').textContent='تعويض عن غياب بتاريخ '+date+' — السبب: '+(v.reason||'—')+' — القاعة الأصلية: '+s.r;
+  document.getElementById('makeup-abs-info').textContent='تعويض عن غياب بتاريخ '+date+' — السبب: '+(v.reason||'—')+' — القاعة الأصلية: '+s.r+(hrs.length?' — الساعات: '+mkHoursLbl(hrs):'');
   var clsSel=document.getElementById('makeup-cls');
-  var classes=[...new Set(getCurrentStudents().map(st=>st.cls).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ar'));
+  var classes=[...new Set(getCurrentStudents().map(st=>st.cls).filter(Boolean))];
+  if(cls0&&classes.indexOf(cls0)<0)classes.push(cls0);
+  classes.sort((a,b)=>a.localeCompare(b,'ar'));
   clsSel.innerHTML=classes.length
-    ? '<option value="">-- اختر القسم --</option>'+classes.map(c=>'<option value="'+c+'">'+c+'</option>').join('')
+    ? '<option value="">-- اختر القسم --</option>'+classes.map(c=>'<option value="'+vacEsc(c)+'">'+vacEsc(c)+'</option>').join('')
     : '<option value="">-- لا توجد أقسام (ارفع لائحة التلاميذ أولاً) --</option>';
+  clsSel.value=cls0;clsSel.disabled=!!cls0; /* القسم محدَّد من الحصة غير المنجزة */
   document.getElementById('makeup-date').value=dk(new Date());
   document.getElementById('makeup-from').value='';
   document.getElementById('makeup-to').value='';
@@ -4856,13 +4889,15 @@ function saveMakeup(){
   if(!date){showToast('⚠️ يرجى تحديد تاريخ التعويض');return;}
   if(!timeFrom||!timeTo){showToast('⚠️ يرجى تحديد التوقيت (من - إلى)');return;}
   if(!room){showToast('⚠️ يرجى تحديد رقم القاعة');return;}
-  var absDate=absKey?absKey.split('|')[0]:'';
-  var absReason=(att[absKey]||{}).reason||'';
-  makeups.push({id:Date.now(),absKey:absKey,teacher:teacher,sub:sub,cls:cls,absDate:absDate,absReason:absReason,date:date,timeFrom:timeFrom,timeTo:timeTo,room:room,createdAt:dk(new Date())});
+  var mk=absKey.split('#')[0];
+  var absDate=mk?mk.split('|')[0]:'';
+  var absReason=(att[mk]||{}).reason||'';
+  var hs=(document.getElementById('makeup-abs-key').dataset.hours||'').split(',').filter(Boolean).map(Number);
+  makeups.push({id:Date.now(),absKey:absKey,teacher:teacher,sub:sub,cls:cls,absDate:absDate,absReason:absReason,absHours:hs,date:date,timeFrom:timeFrom,timeTo:timeTo,room:room,createdAt:dk(new Date())});
   saveMakeups();
   closeModal('makeup-modal');
   renderMakeupPage();
-  showToast('✅ تم تسجيل التعويض');
+  showToast('✅ تم تسجيل تعويض القسم '+cls);
 }
 
 function deleteMakeup(id){
@@ -4874,9 +4909,9 @@ function deleteMakeup(id){
 
 function exportMakeupCSV(){
   if(!makeups.length){showToast('⚠️ لا توجد تعويضات لتصديرها');return;}
-  var header='الأستاذ(ة),المادة,القسم (لوائح مسار),تاريخ الغياب الأصلي,سبب الغياب,تاريخ التعويض,من,إلى,رقم القاعة';
+  var header='الأستاذ(ة),المادة,القسم (لوائح مسار),تاريخ الغياب الأصلي,سبب الغياب,الساعات غير المنجزة,تاريخ التعويض,من,إلى,رقم القاعة';
   var rows=makeups.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')).map(m=>{
-    return ['"'+m.teacher+'"','"'+(m.sub||'')+'"','"'+(m.cls||'')+'"',(m.absDate||''),'"'+(m.absReason||'')+'"',(m.date||''),(m.timeFrom||''),(m.timeTo||''),'"'+(m.room||'')+'"'].join(',');
+    return ['"'+m.teacher+'"','"'+(m.sub||'')+'"','"'+(m.cls||'')+'"',(m.absDate||''),'"'+(m.absReason||'')+'"',(m.absHours||[]).length||'',(m.date||''),(m.timeFrom||''),(m.timeTo||''),'"'+(m.room||'')+'"'].join(',');
   });
   var csv='\ufeff'+header+'\n'+rows.join('\n');
   var blob=new Blob([csv],{type:'text/csv;charset=utf-8'});
